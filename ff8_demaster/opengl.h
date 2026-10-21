@@ -83,10 +83,12 @@ inline LPVOID ogl_scissors;
 void* __stdcall HookGlScissors(GLint x, GLint y, GLsizei width, GLsizei height);
 
 inline LPVOID ogl_draw_elements;
+inline LPVOID ogl_draw_arrays;
 inline std::vector<Vector3f> DrawVerticesBuffer;
 inline std::vector<Vector2f> DrawTexCoordBuffer;
 inline int TestTextureID = -1;
 void __stdcall HookGlDrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices);
+void __stdcall HookGlDrawArrays(GLenum mode, GLint first, GLsizei count);
 
 
 void PumpMessages();
