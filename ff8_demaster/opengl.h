@@ -1,5 +1,6 @@
-﻿#pragma once
+#pragma once
 #include <GL/glew.h>
+#include <unordered_set>
 #include "GLFW/include/GLFW/glfw3.h"
 #include "imgui/imgui.h"
 
@@ -39,9 +40,15 @@ inline frameStructure frame;
 struct VertexTexCoordData
 {
     GLint size;
+    GLenum type;          // DEMASTER-ZH: 需要知道坐标类型才能安全改写 UV
     GLsizei stride;
     const void* pointer;
 };
+
+// DEMASTER-ZH: 加高版字体图集（1024 x 12768）的 V 缩放
+// 游戏按 1024 高算 v，图集实际 12768 高，绘制前把 v 乘 1024/12768 即可
+inline std::unordered_set<GLuint> g_tallAtlasTextures;
+inline constexpr float TALL_ATLAS_V_SCALE = 1024.0f / 12768.0f;
 struct Vector3f
 {
     float x,y,z;
