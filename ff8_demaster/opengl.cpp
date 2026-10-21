@@ -98,22 +98,39 @@ static inline int GetMaxVertexIndex(GLenum type, const void* indices, GLsizei co
     return count - 1;
 }
 
-// ================= DEMASTER-ZH v2: 加高字体图集的 V 缩放 =================
-// 图集从 1024 高拉到 12768，游戏仍按 1024 归一化 -> 采样位置全错。
-// 绘制前把 v 乘 1024/12768，画完立刻还原，避免同一数组被重复缩放。
-// v2 增加：glDrawArrays 支持 + 诊断日志 + VBO 偏移保护
+// ================= DEMASTER-ZH v3: 加高字体图集的 V 缩放 =================
+// 教训：DEMASTER 上传高清图时会换纹理对象（hash 记 84，实际绑 85），
+// 按 ID 匹配必然错。改为直接查当前绑定纹理的真实高度，不依赖 ID 跟踪。
 
-static std::unordered_set<GLuint> g_loggedDrawTex;   // 每个纹理只打一次日志
-static int g_scaleLogCount = 0;
+static GLuint g_hCacheId   = 0xFFFFFFFFu;
+static bool   g_hCacheTall = false;
+static std::unordered_set<GLuint> g_loggedDrawTex;
+static int    g_scaleLogCount = 0;
+
+// 当前绑定的纹理是不是加高图集（高度 > 1024）
+static bool CurrentTextureIsTall()
+{
+    GLint id = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &id);
+    const GLuint uid = static_cast<GLuint>(id);
+    if (uid == g_hCacheId) return g_hCacheTall;
+
+    GLint h = 0;
+    if (uid != 0)
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &h);
+
+    g_hCacheId   = uid;
+    g_hCacheTall = (h > 1024);
+    if (g_hCacheTall)
+        OutputDebug("TALLATLAS: tall texture bound | tex=%u height=%d\n", uid, h);
+    return g_hCacheTall;
+}
 
 static inline bool TallAtlasUVUsable()
 {
-    if (g_tallAtlasTextures.empty()) return false;
-    if (!g_tallAtlasTextures.count(lastBoundTexture)) return false;
     if (!LastTexCoordPointer.pointer) return false;
     if (LastTexCoordPointer.type != GL_FLOAT) return false;
     if (LastTexCoordPointer.size < 2) return false;
-    // pointer 可能是 VBO 里的字节偏移而不是 CPU 地址，低于 64KB 一律不碰
     if (reinterpret_cast<uintptr_t>(LastTexCoordPointer.pointer) < 0x10000) return false;
     return true;
 }
@@ -125,12 +142,14 @@ static inline int TallAtlasStrideBytes()
         : LastTexCoordPointer.size * static_cast<int>(sizeof(float));
 }
 
-static void LogTallDrawOnce(GLsizei count, GLenum type)
+static void LogDrawOnce(GLsizei count, GLenum type, const char* api)
 {
-    if (g_loggedDrawTex.insert(lastBoundTexture).second)
+    GLint id = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &id);
+    if (g_loggedDrawTex.insert(static_cast<GLuint>(id)).second)
     {
-        OutputDebug("TALLATLAS: draw on tall tex %u | count=%d type=%u | tcSize=%d tcType=%u stride=%d ptr=%08x\n",
-            lastBoundTexture, count, type,
+        OutputDebug("TALLATLAS: draw on tall tex %d via %s | count=%d type=%u | tcSize=%d tcType=%u stride=%d ptr=%08x\n",
+            id, api, count, type,
             LastTexCoordPointer.size, LastTexCoordPointer.type,
             LastTexCoordPointer.stride,
             static_cast<unsigned int>(reinterpret_cast<uintptr_t>(LastTexCoordPointer.pointer)));
@@ -151,9 +170,9 @@ void __stdcall HookGlDrawElements(GLenum mode, GLsizei count, GLenum type, const
     int first = 0;
     int last = -1;
 
-    if (g_tallAtlasTextures.count(lastBoundTexture))
+    if (CurrentTextureIsTall())
     {
-        LogTallDrawOnce(count, type);
+        LogDrawOnce(count, type, "glDrawElements");
         if (TallAtlasUVUsable())
         {
             first = 0;
@@ -161,8 +180,8 @@ void __stdcall HookGlDrawElements(GLenum mode, GLsizei count, GLenum type, const
             ScaleTallAtlasUV(first, last, TALL_ATLAS_V_SCALE);
             scaled = true;
             if (g_scaleLogCount++ < 10)
-                OutputDebug("TALLATLAS: SCALED(glDrawElements) tex=%u verts=%d..%d count=%d\n",
-                    lastBoundTexture, first, last, count);
+                OutputDebug("TALLATLAS: SCALED(glDrawElements) verts=%d..%d count=%d mode=%u\n",
+                    first, last, count, mode);
         }
     }
 
@@ -177,16 +196,16 @@ void __stdcall HookGlDrawArrays(GLenum mode, GLint first, GLsizei count)
 {
     bool scaled = false;
 
-    if (g_tallAtlasTextures.count(lastBoundTexture))
+    if (CurrentTextureIsTall())
     {
-        LogTallDrawOnce(count, 0);
+        LogDrawOnce(count, 0, "glDrawArrays");
         if (TallAtlasUVUsable())
         {
             ScaleTallAtlasUV(first, first + count - 1, TALL_ATLAS_V_SCALE);
             scaled = true;
             if (g_scaleLogCount++ < 10)
-                OutputDebug("TALLATLAS: SCALED(glDrawArrays) tex=%u first=%d count=%d\n",
-                    lastBoundTexture, first, count);
+                OutputDebug("TALLATLAS: SCALED(glDrawArrays) first=%d count=%d mode=%u\n",
+                    first, count, mode);
         }
     }
 
@@ -195,7 +214,7 @@ void __stdcall HookGlDrawArrays(GLenum mode, GLint first, GLsizei count)
     if (scaled)
         ScaleTallAtlasUV(first, first + count - 1, 1.0f / TALL_ATLAS_V_SCALE);
 }
-// ================= end DEMASTER-ZH v2 =================
+// ================= end DEMASTER-ZH v3 =================
 
 void PumpMessages()
 {
@@ -659,7 +678,7 @@ void ViewportBackdoorInject(bool& backdoorUsed)
     //LPVOID pGameClockAddress = reinterpret_cast<LPVOID>(GetAddressBase(SUB_BATTLESWIRL_SLEEP));
     //MH_CreateHook(pGameClockAddress, &HookGameClockUpdate, reinterpret_cast<LPVOID*>(&pGameClockUpdateTrampoline));
     
-    OutputDebug("DEMASTER-ZH v2: tall-atlas V-scale patch ACTIVE (drawElements + drawArrays)\n");
+    OutputDebug("DEMASTER-ZH v3: tall-atlas V-scale by texture height (drawElements + drawArrays)\n");
     MH_EnableHook(MH_ALL_HOOKS);
 
     if(IMGUI_DEBUG)
