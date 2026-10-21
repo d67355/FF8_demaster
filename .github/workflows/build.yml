@@ -1,5 +1,5 @@
 # 放到仓库的 .github/workflows/build.yml
-# 推上去后 GitHub 会自动编译，产物在 Actions 页面下载，不用装任何软件
+# 注意：本项目只有 Debug 配置（没有 Release），vendor/lib 里也只提供 *Debug.lib
 name: build-dll
 
 on:
@@ -19,19 +19,21 @@ jobs:
         run: |
           git clone https://github.com/microsoft/vcpkg C:\vcpkg
           C:\vcpkg\bootstrap-vcpkg.bat
+          "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
           C:\vcpkg\vcpkg integrate install
 
       - name: Build
         run: >
           msbuild ff8_demaster.sln /m
-          /p:Configuration=Release
+          /p:Configuration=Debug
           /p:Platform=x86
-          /p:OutDir="${{ github.workspace }}\.build\Release\\"
+          /p:VcpkgRoot=C:\vcpkg
+          /p:OutDir=${{ github.workspace }}/.build/out/
           /p:PostBuildEventUseInBuild=false
 
       - name: Upload DLL
         uses: actions/upload-artifact@v4
         with:
           name: ff8_demaster
-          path: .build/Release/ff8_demaster.dll
+          path: .build/out/ff8_demaster.dll
           if-no-files-found: error
