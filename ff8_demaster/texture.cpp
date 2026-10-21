@@ -195,6 +195,9 @@ void* __stdcall HookGlTexImage2D(GLenum target,
 	const void* data)
 {
 	GLuint boundId = GetCurrentBoundTextureID();
+	// DEMASTER-ZH: 记录加高版字体图集，绘制时要缩放 V
+	if (width == 1024 && height > 1024)
+		g_tallAtlasTextures.insert(boundId);
 	if (DEBUG_GLTEXIMAGE2D)
 		OutputDebug("glTexImage2D (%d): format: %d, %dx%d, void: %08x\n",boundId, internalformat, width, height, data);
 	int lengthModifier = 0;
