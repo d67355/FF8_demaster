@@ -1,4 +1,4 @@
-﻿// ReSharper disable CppZeroConstantCanBeReplacedWithNullptr
+// ReSharper disable CppZeroConstantCanBeReplacedWithNullptr
 
 
 #include "coreHeader.h"
@@ -58,7 +58,7 @@ void* __stdcall HookGlVertexPointer(GLint size, GLenum type, GLsizei stride, con
 
 void* __stdcall HookGlTexCoordPointer(GLint size, GLenum type, GLsizei stride, const void* pointer)
 {
-    LastTexCoordPointer = {.size = size, .stride = stride, .pointer = pointer};
+    LastTexCoordPointer = {.size = size, .type = type, .stride = stride, .pointer = pointer};
     return static_cast<void* (__stdcall*)(GLint, GLenum, GLsizei, const void*)>(ogl_tex_coord_pointer)(size, type, stride, pointer);
 }
 
@@ -78,39 +78,59 @@ void* __stdcall HookGlScissors(GLint x, GLint y, GLsizei width, GLsizei height)
     return static_cast<void* (__stdcall*)(GLint, GLint, GLsizei, GLsizei)>(ogl_scissors)(finalX, finalY, finalWidth, finalHeight);
 }
 
+static inline int GetMaxVertexIndex(GLenum type, const void* indices, GLsizei count)
+{
+    if (!indices) return count - 1;
+    if (type == GL_UNSIGNED_SHORT)
+    {
+        const GLushort* p = static_cast<const GLushort*>(indices);
+        GLushort m = 0;
+        for (GLsizei i = 0; i < count; ++i) if (p[i] > m) m = p[i];
+        return static_cast<int>(m);
+    }
+    if (type == GL_UNSIGNED_INT)
+    {
+        const GLuint* p = static_cast<const GLuint*>(indices);
+        GLuint m = 0;
+        for (GLsizei i = 0; i < count; ++i) if (p[i] > m) m = p[i];
+        return static_cast<int>(m);
+    }
+    return count - 1;
+}
+
+// DEMASTER-ZH: 加高字体图集的 V 缩放
+// 图集从 1024 高拉到 12768，游戏仍按 1024 归一化 -> 采样位置全错。
+// 这里在绘制前把 v 乘 1024/12768，画完立刻还原，避免同一数组被重复缩放。
 void __stdcall HookGlDrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices)
 {
-    // read LastVerticesPointer and LastTexCoordPointer, then obtain respective Vector2f and 3f for UV and Verts
-    // TODO - although, unsure why I'm even doing this. It's all pre-rasterized anyway
+    float* uvBase = nullptr;
+    int strideBytes = 0;
+    int maxIdx = -1;
 
-    // test - enable/disable drawing
-#if 0 //Set to 1- right now I don't want to put pressure on renderer
-    int effectiveStride = LastVerticesPointer.stride;
-    if (effectiveStride == 0)
-        effectiveStride = LastVerticesPointer.size * sizeof(float);
-    DrawVerticesBuffer.clear();
-    DrawVerticesBuffer.resize(count);
-    const char* bytePtr = static_cast<const char*>(LastVerticesPointer.pointer);
-    for (int i = 0; i < count; ++i)
+    if (!g_tallAtlasTextures.empty()
+        && g_tallAtlasTextures.count(lastBoundTexture)
+        && LastTexCoordPointer.pointer
+        && LastTexCoordPointer.type == GL_FLOAT
+        && LastTexCoordPointer.size >= 2)
     {
-        const char* currentVertexAddr = bytePtr + (i * effectiveStride);
+        strideBytes = LastTexCoordPointer.stride
+            ? LastTexCoordPointer.stride
+            : LastTexCoordPointer.size * static_cast<int>(sizeof(float));
+        uvBase = const_cast<float*>(static_cast<const float*>(LastTexCoordPointer.pointer));
+        maxIdx = GetMaxVertexIndex(type, indices, count);
 
-        // 2. Cast to float* to read values
-        const float* fPtr = reinterpret_cast<const float*>(currentVertexAddr);
-
-        // 3. Store
-        DrawVerticesBuffer[i].x = fPtr[0];
-        DrawVerticesBuffer[i].y = fPtr[1];
-        DrawVerticesBuffer[i].z = (LastVerticesPointer.size > 2) ? fPtr[2] : 0.0f;
-        if (lastBoundTexture == TestTextureID)
-        {
-            return;
-        }
+        for (int i = 0; i <= maxIdx; ++i)
+            *reinterpret_cast<float*>(reinterpret_cast<char*>(uvBase) + i * strideBytes + sizeof(float))
+                *= TALL_ATLAS_V_SCALE;
     }
-#endif
-    
+
     static_cast<void (__stdcall*)(GLenum, GLsizei, GLenum, const void*)>(ogl_draw_elements)
-    (mode,count, type, indices);
+    (mode, count, type, indices);
+
+    if (uvBase)
+        for (int i = 0; i <= maxIdx; ++i)
+            *reinterpret_cast<float*>(reinterpret_cast<char*>(uvBase) + i * strideBytes + sizeof(float))
+                /= TALL_ATLAS_V_SCALE;
 }
 
 void PumpMessages()
